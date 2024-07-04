@@ -4,6 +4,8 @@
 #include <Windows.h>
 #include <tlhelp32.h>
 #include <Psapi.h>
+#include <winbase.h>
+#include <processthreadsapi.h>
 
 #define MODULE_ARRAY_INITIAL_SIZE           100
 #define WM_APP_CRASHED                      WM_USER + 100
@@ -215,7 +217,8 @@ int VnInjectAndMonitorProcess(
     int* messages,
     DWORD messagesSize,
     HWND* lphwnd,
-    LPVOID* lpParam
+    LPVOID* lpParam,
+    bool onlyActiveSID
 )
 {
     SIZE_T i = 0;
@@ -249,6 +252,7 @@ int VnInjectAndMonitorProcess(
     HANDLE hThread = NULL;
     DWORD dwThreadExitCode = 0;
     SIZE_T dwBytesRead = 0;
+    DWORD dwSessionId = 0;
     BYTE shellCode[] =
     {
         0x53, 0x48, 0x89, 0xE3, 0x48, 0x83, 0xEC, 0x20, 0x66, 0x83,
@@ -321,7 +325,7 @@ int VnInjectAndMonitorProcess(
     hInjection = (uintptr_t)(hInjectionMainFunc) - (uintptr_t)(hInjectionDll);
     if (lphInjection)
     {
-        *lphInjection = hInjection;
+        *lphInjection = (LPVOID)hInjection;
     }
     FreeLibrary(hInjectionDll);
     wprintf(
@@ -397,35 +401,49 @@ int VnInjectAndMonitorProcess(
                     if (!wcscmp(stProcessEntry.szExeFile, szProcessName))
                     {
                         dwProcessId = stProcessEntry.th32ProcessID;
-                        hProcess = OpenProcess(
-                            PROCESS_ALL_ACCESS,
-                            FALSE,
-                            dwProcessId
-                        );
-                        if (lphProcess)
-                        {
-                            *lphProcess = hProcess;
-                        }
-                        if (hProcess == NULL)
+                        bResult = ProcessIdToSessionId(dwProcessId, &dwSessionId);
+                        if (!bResult)
                         {
                             if (stream)
                             {
                                 fprintf(
                                     stream,
-                                    "4. ERROR: Cannot get handle to application.\n"
+                                    "4. ERROR: Cannot get session ID from process ID.\n"
                                 );
                             }
                             return ERROR_APP_OPENPROCESS;
                         }
-                        if (stream)
-                        {
-                            fprintf(
-                                stream,
-                                "4. Found application, PID: %d\n",
+                        if (dwSessionId == WTSGetActiveConsoleSessionId() || !onlyActiveSID) {
+                            hProcess = OpenProcess(
+                                PROCESS_ALL_ACCESS,
+                                FALSE,
                                 dwProcessId
                             );
+                            if (lphProcess)
+                            {
+                                *lphProcess = hProcess;
+                            }
+                            if (hProcess == NULL)
+                            {
+                                if (stream)
+                                {
+                                    fprintf(
+                                        stream,
+                                        "4. ERROR: Cannot get handle to application.\n"
+                                    );
+                                }
+                                return ERROR_APP_OPENPROCESS;
+                            }
+                            if (stream)
+                            {
+                                fprintf(
+                                    stream,
+                                    "4. Found application, PID: %d\n",
+                                    dwProcessId
+                                );
+                            }
+                            break;
                         }
-                        break;
                     }
                 }
             }

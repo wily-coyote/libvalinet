@@ -10,6 +10,8 @@
 #include <valinet/internet/get.h>
 #include <stdio.h>
 #include <Windows.h>
+#include <winbase.h>
+#include <shlobj_core.h>
 #include <stdint.h>
 #include <DbgHelp.h>
 #pragma comment(lib, "dbghelp.lib")
@@ -233,7 +235,8 @@ INT VnGetSymbols(
     const char* pdb_file,
     DWORD* addresses,
     char** symbols,
-    DWORD numOfSymbols
+    DWORD numOfSymbols,
+    FILE* stream
 )
 {
     DWORD options;
@@ -292,6 +295,12 @@ INT VnGetSymbols(
     {
         sym_info_t* sym_info = ((sym_info_t*)g_symbol_pool.base) + i;
         addresses[i] = sym_info->addr - VN_PDB_ADDRESS_OFFSET;
+        if (stream != NULL) {
+            fprintf(
+                stream,
+                "%s\n", sym_info->name
+            );
+        }
     }
 
     // Done.
@@ -315,7 +324,8 @@ INT VnDownloadSymbols(
     HMODULE hModule,
     char* dllName,
     char* szLibPath,
-    UINT sizeLibPath
+    UINT sizeLibPath,
+    FILE* stream
 )
 {
     HANDLE hFile;
@@ -339,6 +349,9 @@ INT VnDownloadSymbols(
     char url[_MAX_PATH];
     ZeroMemory(url, _MAX_PATH * sizeof(char));
     strcat_s(url, _MAX_PATH, VN_PDB_SYMBOL_WEB);
+
+    char fileAddr[_MAX_PATH];
+    ZeroMemory(fileAddr, _MAX_PATH * sizeof(char));
 
     hFile = CreateFileA(
         dllName,
@@ -451,7 +464,39 @@ INT VnDownloadSymbols(
                     "%x/",
                     pdb_info->Age
                 );
+
+                // Do the same thing but with backslashes for the file address.
+                strcat_s(fileAddr, _MAX_PATH, pdb_info->PdbFileName);
+                strcat_s(fileAddr, _MAX_PATH, "\\");
+                sprintf_s(
+                    fileAddr + strlen(fileAddr),
+                    33,
+                    "%08lX%04hX%04hX%02hhX%02hhX%02hhX%02hhX%02hhX%02hhX%02hhX%02hhX",
+                    pdb_info->Guid.Data1,
+                    pdb_info->Guid.Data2,
+                    pdb_info->Guid.Data3,
+                    pdb_info->Guid.Data4[0],
+                    pdb_info->Guid.Data4[1],
+                    pdb_info->Guid.Data4[2],
+                    pdb_info->Guid.Data4[3],
+                    pdb_info->Guid.Data4[4],
+                    pdb_info->Guid.Data4[5],
+                    pdb_info->Guid.Data4[6],
+                    pdb_info->Guid.Data4[7]
+                );
+                sprintf_s(
+                    fileAddr + strlen(fileAddr),
+                    4,
+                    "%x\\",
+                    pdb_info->Age
+                );
+
                 strcat_s(url, _MAX_PATH, pdb_info->PdbFileName);
+
+                //strncpy_s(fileAddr, _MAX_PATH - 1, url + sizeof(VN_PDB_SYMBOL_WEB) - 1, _MAX_PATH - sizeof(VN_PDB_SYMBOL_WEB) - 2);
+
+                //fileAddr[_MAX_PATH - 1] = 0;
+
                 break;
             }
         }
@@ -473,14 +518,41 @@ INT VnDownloadSymbols(
     strcat_s(
         szLibPath,  
         sizeLibPath,
+        fileAddr
+    );
+
+    LSTATUS dir = SHCreateDirectoryExA(NULL, szLibPath, NULL);
+
+    if ( dir != ERROR_SUCCESS && dir != ERROR_FILE_EXISTS && dir != ERROR_ALREADY_EXISTS && dir != ERROR_CANCELLED) {
+        UnmapViewOfFile(lpFileBase);
+        CloseHandle(hFileMapping);
+        CloseHandle(hFile);
+        return 8;
+    }
+
+    strcat_s(
+        szLibPath,
+        sizeLibPath,
         pdb_info->PdbFileName
     );
+
+    if (stream != NULL) {
+        fprintf(
+            stream,
+            "%s\n", szLibPath
+        );
+    }
+
     UnmapViewOfFile(lpFileBase);
     CloseHandle(hFileMapping);
     CloseHandle(hFile);
     if (fileExists(szLibPath))
     {
-        DeleteFileA(szLibPath);
+        UnmapViewOfFile(lpFileBase);
+        CloseHandle(hFileMapping);
+        CloseHandle(hFile);
+        return 0;
+        //DeleteFileA(szLibPath);
     }
     return VnDownloadFile(
         szLibPath,
